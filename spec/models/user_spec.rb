@@ -30,7 +30,7 @@ RSpec.describe User, type: :model do
 
   before do
     omniauth_mock_providers_payload
-    allow(SiteConfig).to receive(:authentication_providers).and_return(Authentication::Providers.available)
+    allow(Settings::Authentication).to receive(:providers).and_return(Authentication::Providers.available)
   end
 
   describe "validations" do
@@ -38,6 +38,8 @@ RSpec.describe User, type: :model do
       subject { user }
 
       it { is_expected.to have_one(:profile).dependent(:destroy) }
+      it { is_expected.to have_one(:notification_setting).dependent(:destroy) }
+      it { is_expected.to have_one(:setting).dependent(:destroy) }
 
       it { is_expected.to have_many(:access_grants).class_name("Doorkeeper::AccessGrant").dependent(:delete_all) }
       it { is_expected.to have_many(:access_tokens).class_name("Doorkeeper::AccessToken").dependent(:delete_all) }
@@ -143,22 +145,6 @@ RSpec.describe User, type: :model do
           .class_name("UserBlock")
           .with_foreign_key("blocker_id")
           .dependent(:delete_all)
-      end
-
-      it do
-        expect(subject).to have_many(:buffer_updates_approved)
-          .class_name("BufferUpdate")
-          .with_foreign_key("approver_user_id")
-          .inverse_of(:approver_user)
-          .dependent(:nullify)
-      end
-
-      it do
-        expect(subject).to have_many(:buffer_updates_composed)
-          .class_name("BufferUpdate")
-          .with_foreign_key("composer_user_id")
-          .inverse_of(:composer_user)
-          .dependent(:nullify)
       end
 
       it do
@@ -604,7 +590,6 @@ RSpec.describe User, type: :model do
 
     it "persists extracts relevant identity data from new twitter user" do
       new_user = user_from_authorization_service(:twitter, nil, "navbar_basic")
-      expect(new_user.twitter_followers_count).to eq(100)
       expect(new_user.twitter_created_at).to be_kind_of(ActiveSupport::TimeWithZone)
     end
 
@@ -637,6 +622,34 @@ RSpec.describe User, type: :model do
         user.follow(create(:user))
       end.to change(user.all_follows, :size).by(1)
     end
+  end
+
+  describe "#suspended?" do
+    subject { user.suspended? }
+
+    context "with suspended role" do
+      before do
+        user.add_role(:suspended)
+      end
+
+      it { is_expected.to be true }
+    end
+
+    it { is_expected.to be false }
+  end
+
+  describe "#comment_suspended?" do
+    subject { user.comment_suspended? }
+
+    context "with comment_suspended role" do
+      before do
+        user.add_role(:comment_suspended)
+      end
+
+      it { is_expected.to be true }
+    end
+
+    it { is_expected.to be false }
   end
 
   describe "#moderator_for_tags" do
@@ -775,17 +788,6 @@ RSpec.describe User, type: :model do
     end
   end
 
-  describe "#pro?" do
-    it "returns false if the user is not a pro" do
-      expect(user.pro?).to be(false)
-    end
-
-    it "returns true if the user has the pro role" do
-      user.add_role(:pro)
-      expect(user.pro?).to be(true)
-    end
-  end
-
   describe "#enough_credits?" do
     it "returns false if the user has less unspent credits than neeed" do
       expect(user.enough_credits?(1)).to be(false)
@@ -882,11 +884,23 @@ RSpec.describe User, type: :model do
     end
 
     it "returns true if the user has all the enabled providers" do
-      allow(SiteConfig).to receive(:authentication_providers).and_return(Authentication::Providers.available)
+      allow(Settings::Authentication).to receive(:providers).and_return(Authentication::Providers.available)
 
       user = create(:user, :with_identity)
 
       expect(user.authenticated_with_all_providers?).to be(true)
+    end
+  end
+
+  describe "#trusted" do
+    it "memoizes the result from rolify" do
+      allow(Rails.cache)
+        .to receive(:fetch)
+        .with("user-#{user.id}/has_trusted_role", expires_in: 200.hours)
+        .and_return(false)
+        .once
+
+      2.times { user.trusted }
     end
   end
 

@@ -29,26 +29,12 @@ class SiteConfig < RailsSettings::Base
   field :health_check_token, type: :string
   field :video_encoder_key, type: :string
 
-  # Authentication
-  field :allow_email_password_registration, type: :boolean, default: false
-  field :allow_email_password_login, type: :boolean, default: true
+  # NOTE: @citizen428 These two values will be removed once we fully migrated
+  # to Settings::Authentication. Until then we need them for the data update script.
   field :allowed_registration_email_domains, type: :array, default: %w[], validates: {
     valid_domain_csv: true
   }
-  field :display_email_domain_allow_list_publicly, type: :boolean, default: false
-  field :require_captcha_for_email_password_registration, type: :boolean, default: false
   field :authentication_providers, type: :array, default: %w[]
-  field :invite_only_mode, type: :boolean, default: false
-  field :twitter_key, type: :string, default: ApplicationConfig["TWITTER_KEY"]
-  field :twitter_secret, type: :string, default: ApplicationConfig["TWITTER_SECRET"]
-  field :github_key, type: :string, default: ApplicationConfig["GITHUB_KEY"]
-  field :github_secret, type: :string, default: ApplicationConfig["GITHUB_SECRET"]
-  field :facebook_key, type: :string
-  field :facebook_secret, type: :string
-  field :apple_client_id, type: :string
-  field :apple_key_id, type: :string
-  field :apple_pem, type: :string
-  field :apple_team_id, type: :string
 
   # Campaign
   field :campaign_call_to_action, type: :string, default: "Share your project"
@@ -89,8 +75,7 @@ class SiteConfig < RailsSettings::Base
   }
 
   # Email digest frequency
-  field :periodic_email_digest_max, type: :integer, default: 2
-  field :periodic_email_digest_min, type: :integer, default: 0
+  field :periodic_email_digest, type: :integer, default: 2
 
   # Jobs
   field :jobs_url, type: :string
@@ -98,10 +83,6 @@ class SiteConfig < RailsSettings::Base
 
   # Google Analytics Tracking ID, e.g. UA-71991000-1
   field :ga_tracking_id, type: :string, default: ApplicationConfig["GA_TRACKING_ID"]
-
-  # Google ReCATPCHA keys
-  field :recaptcha_site_key, type: :string, default: ApplicationConfig["RECAPTCHA_SITE"]
-  field :recaptcha_secret_key, type: :string, default: ApplicationConfig["RECAPTCHA_SECRET"]
 
   # Images
   field :main_social_image,
@@ -170,6 +151,7 @@ class SiteConfig < RailsSettings::Base
   # Rate limits and spam prevention
   field :rate_limit_follow_count_daily, type: :integer, default: 500
   field :rate_limit_comment_creation, type: :integer, default: 9
+  field :rate_limit_comment_antispam_creation, type: :integer, default: 1
   field :rate_limit_listing_creation, type: :integer, default: 1
   field :rate_limit_published_article_creation, type: :integer, default: 9
   field :rate_limit_published_article_antispam_creation, type: :integer, default: 1
@@ -184,6 +166,8 @@ class SiteConfig < RailsSettings::Base
   field :rate_limit_user_subscription_creation, type: :integer, default: 3
 
   field :spam_trigger_terms, type: :array, default: []
+
+  field :user_considered_new_days, type: :integer, default: 3
 
   # Social Media
   field :social_media_handles, type: :hash, default: {
@@ -232,6 +216,9 @@ class SiteConfig < RailsSettings::Base
     xlarge: 250
   }
 
+  # Push Notifications
+  field :push_notifications_ios_pem, type: :string
+
   # Returns true if we are operating on a local installation, false otherwise
   def self.local?
     app_domain.include?("localhost")
@@ -242,17 +229,6 @@ class SiteConfig < RailsSettings::Base
   def self.dev_to?
     app_domain == "dev.to"
   end
-
-  # Apple uses different keys than the usual `PROVIDER_NAME_key` or
-  # `PROVIDER_NAME_secret` so these will help the generalized authentication
-  # code to work, i.e. https://github.com/forem/forem/blob/master/app/helpers/authentication_helper.rb#L26-L29
-  def self.apple_key
-    return unless apple_client_id.present? && apple_key_id.present? &&
-      apple_pem.present? && apple_team_id.present?
-
-    "present"
-  end
-  singleton_class.__send__(:alias_method, :apple_secret, :apple_key)
 
   # To get default values
   def self.get_default(field)

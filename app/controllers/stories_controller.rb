@@ -46,7 +46,7 @@ class StoriesController < ApplicationController
       handle_possible_redirect
     else
       @podcast = Podcast.available.find_by!(slug: params[:username])
-      @episode = PodcastEpisode.available.find_by!(slug: params[:slug])
+      @episode = @podcast.podcast_episodes.available.find_by!(slug: params[:slug])
       handle_podcast_show
     end
   end
@@ -236,6 +236,7 @@ class StoriesController < ApplicationController
     # 2nd with 1 badge (!) <-- and that would look off.
     @badges_limit = 6
     @profile = @user.profile.decorate
+    @is_user_flagged = Reaction.where(user_id: session_current_user_id, reactable: @user).any?
 
     set_surrogate_key_header "articles-user-#{@user.id}"
     set_user_json_ld

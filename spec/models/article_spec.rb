@@ -18,7 +18,6 @@ RSpec.describe Article, type: :model do
     it { is_expected.to belong_to(:organization).optional }
     it { is_expected.to belong_to(:user) }
 
-    it { is_expected.to have_many(:buffer_updates).dependent(:destroy) }
     it { is_expected.to have_many(:comments).dependent(:nullify) }
     it { is_expected.to have_many(:html_variant_successes).dependent(:nullify) }
     it { is_expected.to have_many(:html_variant_trials).dependent(:nullify) }
@@ -437,7 +436,7 @@ RSpec.describe Article, type: :model do
 
   describe "#published_at" do
     it "does not have a published_at if not published" do
-      unpublished_article = build(:article, published: false)
+      unpublished_article = build(:article, published: false, published_at: nil)
       unpublished_article.validate # to make sure the front matter extraction happens
       expect(unpublished_article.published_at).to be_nil
     end
@@ -763,6 +762,89 @@ RSpec.describe Article, type: :model do
     end
   end
 
+  describe ".cached_tagged_with" do
+    it "can search for a single tag" do
+      included = create(:article, tags: "includeme")
+      excluded = create(:article, tags: "lol, nope")
+
+      articles = described_class.cached_tagged_with("includeme")
+
+      expect(articles).to include included
+      expect(articles).not_to include excluded
+      expect(articles.to_a).to eq described_class.tagged_with("includeme").to_a
+    end
+
+    it "can search among multiple tags" do
+      included = [
+        create(:article, tags: "omg, wtf"),
+        create(:article, tags: "omg, lol"),
+      ]
+      excluded = create(:article, tags: "nope, excluded")
+
+      articles = described_class.cached_tagged_with("omg")
+
+      expect(articles).to include(*included)
+      expect(articles).not_to include excluded
+      expect(articles.to_a).to include(*described_class.tagged_with("omg").to_a)
+    end
+
+    it "can search for multiple tags" do
+      included = create(:article, tags: "includeme, please, lol")
+      excluded_partial_match = create(:article, tags: "excluded, please")
+      excluded_no_match = create(:article, tags: "excluded, omg")
+
+      articles = described_class.cached_tagged_with(%w[includeme please])
+
+      expect(articles).to include included
+      expect(articles).not_to include excluded_partial_match
+      expect(articles).not_to include excluded_no_match
+      expect(articles.to_a).to eq described_class.tagged_with(%w[includeme please]).to_a
+    end
+  end
+
+  describe ".cached_tagged_with_any" do
+    it "can search for a single tag" do
+      included = create(:article, tags: "includeme")
+      excluded = create(:article, tags: "lol, nope")
+
+      articles = described_class.cached_tagged_with_any("includeme")
+
+      expect(articles).to include included
+      expect(articles).not_to include excluded
+      expect(articles.to_a).to eq described_class.tagged_with("includeme", any: true).to_a
+    end
+
+    it "can search among multiple tags" do
+      included = [
+        create(:article, tags: "omg, wtf"),
+        create(:article, tags: "omg, lol"),
+      ]
+      excluded = create(:article, tags: "nope, excluded")
+
+      articles = described_class.cached_tagged_with_any("omg")
+      expected = described_class.tagged_with("omg", any: true).to_a
+
+      expect(articles).to include(*included)
+      expect(articles).not_to include excluded
+      expect(articles.to_a).to include(*expected)
+    end
+
+    it "can search for multiple tags" do
+      included = create(:article, tags: "includeme, please, lol")
+      included_partial_match = create(:article, tags: "includeme, omg")
+      excluded_no_match = create(:article, tags: "excluded, omg")
+
+      articles = described_class.cached_tagged_with_any(%w[includeme please])
+      expected = described_class.tagged_with(%w[includeme please], any: true).to_a
+
+      expect(articles).to include included
+      expect(articles).to include included_partial_match
+      expect(articles).not_to include excluded_no_match
+
+      expect(articles.to_a).to include(*expected)
+    end
+  end
+
   context "when callbacks are triggered before save" do
     it "assigns path on save" do
       expect(article.path).to eq("/#{article.username}/#{article.slug}")
@@ -834,7 +916,7 @@ RSpec.describe Article, type: :model do
       it "does not suspend user if only single vomit" do
         article.body_markdown = article.body_markdown.gsub(article.title, "This post is about Yahoomagoo gogo")
         article.save
-        expect(article.user.banned).to be false
+        expect(article.user.suspended?).to be false
       end
 
       it "suspends user with 3 comment vomits" do
@@ -847,7 +929,7 @@ RSpec.describe Article, type: :model do
         article.save
         second_article.save
         third_article.save
-        expect(article.user.banned).to be true
+        expect(article.user.suspended?).to be true
         expect(Note.last.reason).to eq "automatic_suspend"
       end
 
@@ -915,6 +997,44 @@ RSpec.describe Article, type: :model do
     end
   end
 
+  context "when triggers are invoked" do
+    let(:article) { create(:article) }
+
+    before do
+      article.update(body_markdown: "An intense movie")
+    end
+
+    it "sets .reading_list_document on insert" do
+      expect(article.reload.reading_list_document).to be_present
+    end
+
+    it "updates .reading_list_document with body_markdown" do
+      article.update(body_markdown: "Something has changed")
+
+      expect(article.reload.reading_list_document).to include("something")
+    end
+
+    it "updates .reading_list_document with cached_tag_list" do
+      article.update(tag_list: %w[rust python])
+
+      expect(article.reload.reading_list_document).to include("rust")
+    end
+
+    it "updates .reading_list_document with title" do
+      article.update(title: "Synecdoche, Los Angeles")
+
+      expect(article.reload.reading_list_document).to include("angeles")
+    end
+
+    it "removes a previous value from .reading_list_document on update", :aggregate_failures do
+      tag = article.tags.first.name
+      article.update(tag_list: %w[fsharp go])
+
+      expect(article.reload.reading_list_document).not_to include(tag)
+      expect(article.reload.reading_list_document).to include("fsharp")
+    end
+  end
+
   describe ".feed" do
     it "returns records with a subset of attributes" do
       feed_article = described_class.feed.first
@@ -978,6 +1098,80 @@ RSpec.describe Article, type: :model do
       co_author2 = create(:user)
       article.co_author_ids_list = "#{co_author1.id}, #{co_author2.id}"
       expect(article.co_author_ids).to match_array([co_author1.id, co_author2.id])
+    end
+  end
+
+  describe "#plain_html" do
+    let(:body_markdown) do
+      <<~MD
+        ---
+        title: Test highlight panel
+        published: false
+        ---
+
+        text before
+
+          ```ruby
+          def foo():
+            puts "bar"
+          ```
+
+        text after
+      MD
+    end
+
+    it "doesn't include highlight panel markup" do
+      article = create(:article, body_markdown: body_markdown)
+
+      expect(article.plain_html).to include("text before")
+      expect(article.plain_html).to include("highlight")
+      expect(article.plain_html).not_to include("highlight__panel")
+    end
+  end
+
+  describe "#user_mentions_in_markdown" do
+    before do
+      stub_const("Article::MAX_USER_MENTIONS", 7)
+      stub_const("Article::MAX_USER_MENTION_LIVE_AT", 1.day.ago) # Set live_at date to a time in the past
+    end
+
+    it "is valid with any number of mentions if created before MAX_USER_MENTION_LIVE_AT date" do
+      # Explicitly set created_at date to a time before MAX_USER_MENTION_LIVE_AT
+      article = create(:article, created_at: 3.days.ago)
+
+      article.body_markdown = "hi @#{user.username}! " * (Article::MAX_USER_MENTIONS + 1)
+      expect(article).to be_valid
+    end
+
+    it "is valid with seven or fewer mentions if created after MAX_USER_MENTION_LIVE_AT date" do
+      article.body_markdown = "hi @#{user.username}! " * Article::MAX_USER_MENTIONS
+      expect(article).to be_valid
+    end
+
+    it "is invalid with more than seven mentions if created after MAX_USER_MENTION_LIVE_AT date" do
+      article.body_markdown = "hi @#{user.username}! " * (Article::MAX_USER_MENTIONS + 1)
+      expect(article).not_to be_valid
+      expect(article.errors[:base])
+        .to include("You cannot mention more than #{Article::MAX_USER_MENTIONS} users in a post!")
+    end
+  end
+
+  describe "#followers" do
+    it "returns an array of users who follow the article's author" do
+      following_user = create(:user)
+      following_user.follow(user)
+
+      expect(article.followers.length).to eq(1)
+      expect(article.followers.first.username).to eq(following_user.username)
+    end
+  end
+
+  describe "#update_score" do
+    it "stably sets the correct blackbox values" do
+      create(:reaction, reactable: article, points: 1)
+
+      article.update_score
+      expect { article.update_score }.not_to change { article.reload.hotness_score }
     end
   end
 end
